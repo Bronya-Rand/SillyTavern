@@ -718,6 +718,7 @@ async function openAttachmentManager() {
     let sortOrder = localStorage.getItem('DataBank_sortOrder') || 'desc';
     let filterString = '';
     const hasFandomPlugin = await isFandomPluginAvailable();
+    const hasMiHoYoPlugin = await isMiHoYoPluginAvailable();
     const template = $(await renderExtensionTemplateAsync('attachments', 'manager', {}));
     renderButtons(ATTACHMENT_SOURCE.GLOBAL);
     renderButtons(ATTACHMENT_SOURCE.CHARACTER);
@@ -727,6 +728,9 @@ async function openAttachmentManager() {
     });
     template.find('.scrapeFandomButton').toggle(hasFandomPlugin).on('click', function () {
         openFandomScraper(String($(this).data('attachment-manager-target')), renderAttachments);
+    });
+    template.find('.scrapeMiHoYoButton').toggle(hasMiHoYoPlugin).on('click', function () {
+        openMiHoYoScraper(String($(this).data('attachment-manager-target')), renderAttachments);
     });
     template.find('.uploadFileButton').on('click', function () {
         openFileUploader(String($(this).data('attachment-manager-target')), renderAttachments);
@@ -886,6 +890,121 @@ async function openFandomScraper(target, callback) {
     }
 }
 
+// Recursion
+function miHoYoScraperHelper(m) {
+    let content = '';
+    for (const c in m) {
+        if (typeof m[c] == 'object') {
+            content += miHoYoScraperHelper(m[c]);
+        }
+        else {
+            const keyValue = m[c];
+            if (!keyValue.endsWith("Ascension")) {
+                const keyTitle = c.charAt(0).toUpperCase() + c.slice(1)
+                content += `${keyTitle}: ${m[c]}\n`;
+            } else {
+                content += `${m[c]}\n`;
+            }
+        }
+    }
+    return content;
+}
+
+async function openMiHoYoScraper(target, callback) {
+    if (!await isMiHoYoPluginAvailable()) {
+        toastr.error('miHoYo scraper plugin is not available');
+        return;
+    }
+
+    let miHoYoWiki = '';
+    let miHoYoWikiID = '';
+
+    const template = $(await renderExtensionTemplateAsync('attachments', 'mihoyo-scrape', {}));
+
+    template.find('select[name="mihoyoScrapeWikiDropdown"]').on('change', function () {
+        miHoYoWiki = String($(this).val());
+    });
+    template.find('input[name="mihoyoScrapeWikiID"]').on('input', function () {
+        miHoYoWikiID = String($(this).val());
+    });
+
+    const confirm = await callGenericPopup(template, POPUP_TYPE.CONFIRM, '', { wide: false, large: false });
+
+    if (confirm !== POPUP_RESULT.AFFIRMATIVE) {
+        return;
+    }
+
+    if (!miHoYoWiki) {
+        toastr.error('A specific HoYoLab wiki is required');
+        return;
+    }
+
+    if (!miHoYoWikiID) {
+        toastr.error('A specific HoYoLab wiki ID is required');
+        return;
+    }
+
+    console.log('Scraping miHoYo wiki', miHoYoWiki, miHoYoWikiID)
+
+    try {
+        const result = await fetch('/api/plugins/hoyoverse/silver-wolf', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ miHoYoWiki, miHoYoWikiID }),
+        });
+
+        if (!result.ok) {
+            const error = await result.text();
+            throw new Error(error);
+        }
+
+        const data = await result.json();
+        const fileName = data[0].name;
+        const dataContent = data[0].content;
+        
+        //parse the data as a long string of data
+        let combinedContent = '';
+        combinedContent += `Name: ${data[0].name}\n`;
+        switch(data[0].type) {
+            case 'Character':
+                for (const c in dataContent) {
+                    const temp_key_split = c.split("_");
+                    let keyTitle = '';
+                    if (temp_key_split.length > 1) {
+                        for (let i = 0; i < temp_key_split.length; i++) {
+                            const key = temp_key_split[i];
+                            if (i === temp_key_split.length - 1) {
+                                keyTitle += key.charAt(0).toUpperCase() + key.slice(1);
+                            } else {
+                                keyTitle += key.charAt(0).toUpperCase() + key.slice(1) + ' ';
+                            }
+                        }
+                    } else {
+                        keyTitle = c.charAt(0).toUpperCase() + c.slice(1);
+                    }
+
+                    if (typeof dataContent[c] == 'object') {
+                        combinedContent += `\n${keyTitle}:\n`
+                        combinedContent += miHoYoScraperHelper(dataContent[c])
+                    }
+                    else {
+                        combinedContent += `${keyTitle}: ${dataContent[c]}`;
+                    }
+                    combinedContent += '\n';
+                }
+        }
+
+        const file = new File([combinedContent], `${fileName}.txt`, { type: 'text/plain' });
+        await uploadFileAttachmentToServer(file, target);
+
+        toastr.success(`Scraped the ${miHoYoWiki} HoYoLAB wiki from Wiki Page ID: ${miHoYoWikiID}`);
+        callback();
+    } catch (error) {
+        console.error('miHoYo scraping failed', error);
+        toastr.error('Check browser console for details.', 'miHoYo scraping failed');
+    }
+}
+
 /**
  * Uploads a file attachment.
  * @param {string} target File upload target
@@ -1008,6 +1127,20 @@ async function isFandomPluginAvailable() {
         return result.ok;
     } catch (error) {
         console.debug('Could not probe Fandom plugin', error);
+        return false;
+    }
+}
+
+async function isMiHoYoPluginAvailable() {
+    try {
+        const result = await fetch('/api/plugins/hoyoverse/probe', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+        });
+
+        return result.ok;
+    } catch (error) {
+        console.debug('Could not probe miHoYo plugin', error);
         return false;
     }
 }
