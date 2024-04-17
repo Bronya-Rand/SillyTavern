@@ -992,6 +992,14 @@ async function openMiHoYoScraper(target, callback) {
                     }
                     combinedContent += '\n';
                 }
+                break;
+            case 'Adventure':
+            case 'Aeons':
+                combinedContent += `Description: ${dataContent.description}\n`;
+                break;
+            default:
+                combinedContent += `Description: ${dataContent.description}\n`;
+                break;
         }
 
         const file = new File([combinedContent], `${fileName}.txt`, { type: 'text/plain' });
